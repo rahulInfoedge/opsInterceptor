@@ -1,0 +1,55 @@
+{
+    "manifest_version": 3,
+    "name": "Outlook Request Interceptor",
+    "version": "1.0",
+    "description": "Intercepts Outlook requests to analyze emails for tasks",
+    "permissions": [
+        "webRequest",
+        "storage",
+        "activeTab",
+        "debugger",
+        "tabs"
+    ],
+    "host_permissions": [
+        "*://outlook.live.com/*",
+        "*://outlook.office.com/*",
+        "*://outlook.office365.com/*",
+        "*://*.outlook.com/*",
+        "*://*.office.com/*",
+        "*://outlook-sdf.office.com/*"
+    ],
+    "background": {
+        "service_worker": "background.js"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "https://outlook.live.com/*",
+                "https://outlook.office.com/*",
+                "https://outlook.office365.com/*",
+                "https://*.outlook.com/*"
+            ],
+            "js": [
+                "content.js"
+            ],
+            "run_at": "document_start"
+        }
+    ],
+    "action": {
+        "default_popup": "popup.html",
+        "default_title": "View Intercepted Requests"
+    },
+    "web_accessible_resources": [
+        {
+            "resources": [
+                "injected.js",
+                "early-interceptor.js"
+            ],
+            "matches": [
+                "https://*.outlook.com/*",
+                "https://outlook.office.com/*",
+                "https://outlook.live.com/*"
+            ]
+        }
+    ]
+}
