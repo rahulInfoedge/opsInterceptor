@@ -6,7 +6,7 @@ let interceptedRequests = [];
 let debuggerTabs = new Set();
 let responseBodyCache = new Map(); // Cache for matching request/response pairs
 
-let downloadToken = "";
+let downloadToken = " ";
 
 // Listen for web requests
 chrome.webRequest.onBeforeRequest.addListener(
