@@ -20,7 +20,7 @@ function injectEarlyInterceptor() {
 // Inject immediately
 injectEarlyInterceptor();
 
-// Listen for early network captures
+// Listen for early network captures from main thread
 window.addEventListener('earlyNetworkCapture', (event) => {
   const data = event.detail;
   console.log('📥 Early network data captured:', data.url, data.status);
@@ -32,6 +32,22 @@ window.addEventListener('earlyNetworkCapture', (event) => {
   }).catch(err => {
     console.log('Could not send to background:', err);
   });
+});
+
+// Listen for messages from Web Workers
+window.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'WORKER_NETWORK_CAPTURE') {
+    const data = event.data.data;
+    console.log('📥 Worker network data captured:', data.url, data.status);
+    
+    // Send to background for analysis (same format as earlyNetworkCapture)
+    chrome.runtime.sendMessage({
+      type: 'EARLY_NETWORK_DATA',
+      data: data
+    }).catch(err => {
+      console.log('Could not send worker data to background:', err);
+    });
+  }
 });
 
 // Also inject the normal monitoring script

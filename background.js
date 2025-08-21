@@ -6,6 +6,7 @@ let interceptedRequests = [];
 let debuggerTabs = new Set();
 let responseBodyCache = new Map(); // Cache for matching request/response pairs
 
+let downloadToken = "";
 
 // Listen for web requests
 chrome.webRequest.onBeforeRequest.addListener(
@@ -286,6 +287,105 @@ function isRelevantOutlookRequest(url) {
   return isRelevant;
 }
 
+// Add 'downloads' permission to your manifest.json
+// "permissions": ["downloads", ...]
+
+/**
+ * Handles attachment download using fetch and chrome.downloads API
+ * @param {string} attachmentId - The ID of the attachment to download
+ * @param {string} authToken - The authentication token for the request
+ * @returns {Promise<Object>} - A response-like object
+ */
+async function downloadAttachment(attachmentId, authToken) {
+  const baseUrl = 'https://attachments.office.net/owa/rahul.soni%40iimjobs.com/service.svc/s/DownloadMessage';
+  
+  // Create the download URL with parameters
+  const downloadUrl = new URL(baseUrl);
+  downloadUrl.searchParams.append('id', attachmentId);
+  downloadUrl.searchParams.append('outputFormat', '0');
+  downloadUrl.searchParams.append('token', authToken);
+
+  try {
+    // First, fetch the attachment as a blob
+    const response = await fetch(downloadUrl.toString(), {
+      method: 'GET',
+      credentials: 'include',
+      cache: 'no-store',
+      headers: {
+        'Accept': '*/*',
+        'Cache-Control': 'no-cache'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    // Clone the response to read it multiple times
+    const responseClone = response.clone();
+    
+    // First, read as text for logging
+    const text = await response.text();
+    console.log('Response (truncated):', text.length > 500 ? text.substring(0, 500) + '...' : text);
+    
+    // Then use the clone to get the blob
+    const blob = await responseClone.blob();
+    
+    // Create a blob URL and trigger download
+    const blobUrl = URL.createObjectURL(blob);
+    
+    // Use chrome.downloads.download to save the file
+    const downloadId = await new Promise((resolve, reject) => {
+      chrome.downloads.download({
+        url: blobUrl,
+        filename: `attachment_${Date.now()}.bin`,
+        saveAs: false,
+        conflictAction: 'uniquify'
+      }, (downloadId) => {
+        // Clean up the blob URL
+        URL.revokeObjectURL(blobUrl);
+        
+        if (chrome.runtime.lastError) {
+          console.error('Download error details:', chrome.runtime.lastError);
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          console.log('Download started with ID:', downloadId);
+          resolve(downloadId);
+        }
+      });
+    });
+
+    // Return a response-like object for compatibility
+    return {
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(''),
+      json: () => Promise.resolve({})
+    };
+    
+  } catch (error) {
+    console.error('Error in downloadAttachment:', error);
+    throw error;
+  }
+}
+
+// Example usage:
+// const attachmentId = 'AAkALgAAAAAAHYQDEapmEc2byACqAC%2FEWg0AwOFyMLKPbU65g%2Fp%2BPPZGHQABUFgQMwAA';
+// const authToken = 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6IktBbExZZGdhTkZxSll4TG1mRFpnZ3lrVmcyND0i...'; // Your full token
+// downloadAttachment(attachmentId, authToken)
+//   .then(response => response.blob())
+//   .then(blob => {
+//     // Handle the downloaded blob (e.g., save as file)
+//     const url = window.URL.createObjectURL(blob);
+//     const a = document.createElement('a');
+//     a.href = url;
+//     a.download = 'attachment.bin'; // You might want to set a proper filename
+//     document.body.appendChild(a);
+//     a.click();
+//     document.body.removeChild(a);
+//   })
+//   .catch(error => console.error('Download failed:', error));
+
 // Handle messages from content script or popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'GET_INTERCEPTED_REQUESTS') {
@@ -300,6 +400,49 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.type === 'EARLY_NETWORK_DATA') {
     // Handle early network data capture
     console.log('📨 Received early network data:', message.data);
+
+
+    if (message.data.url.includes('service.svc?action=GetAttachmentDownloadToken')) {
+      let responseData = typeof message.data.response === 'string' 
+      ? JSON.parse(message.data.response) 
+      : message.data.response;
+      downloadToken = responseData;
+      // console.log(responseData)
+    }
+
+    if(message.data.url.includes('service.svc?action=GetItem')) {
+      let responseData1 = typeof message.data.response === 'string' 
+      ? JSON.parse(message.data.response) 
+      : message.data.response;
+      let messageId = responseData1?.Body?.ResponseMessages?.Items?.[0]?.Items?.[0]?.ItemId?.Id;
+      if(messageId && downloadToken) {
+        console.log("()()()()()()()()", messageId, downloadToken) 
+
+      downloadAttachment(messageId, downloadToken)
+        .then(response => response.text())
+        .then(text => {
+          // Log truncated response (first 500 chars)
+          console.log('Attachment response (truncated):', 
+            text.length > 500 ? text.substring(0, 500) + '...' : text
+          );
+        })
+        .catch(error => {
+          console.error('Error downloading attachment:', error);
+        });
+
+      }
+      else{
+        console.log("+_+_+_+_++_+__++_+")
+        chrome.notifications.create('', {
+          type: 'basic',
+          title: 'Info',
+          message: 'Indexing the attachments...',
+          iconUrl: 'icon.png'
+        });
+      }
+      
+      // console.log(responseData1)
+    }
     
     // Add to intercepted requests
     const requestData = {

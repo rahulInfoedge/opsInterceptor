@@ -8,6 +8,131 @@
   const originalXHR = XMLHttpRequest;
   const originalFetch = window.fetch;
   
+  // Function to intercept worker communications
+  function interceptWorkerCommunication() {
+    const originalWorker = window.Worker;
+    
+    // Override Worker constructor
+    window.Worker = function(scriptURL, options) {
+      // Create a blob URL with our interceptor code
+      const workerBlob = new Blob([`
+        // Web Worker interceptor
+        (function() {
+          const originalWorkerFetch = fetch;
+          const originalOpenDB = window.indexedDB.open;
+          
+          // Intercept fetch
+          self.fetch = async function(...args) {
+            const url = args[0]?.url || args[0];
+            const shouldIntercept = url && (url.includes('service.svc?action=GetItem'));
+            
+            if (shouldIntercept) {
+              console.log('🌐 WORKER FETCH:', url);
+              try {
+                const response = await originalWorkerFetch.apply(this, args);
+                const responseClone = response.clone();
+                const text = await responseClone.text();
+                
+                self.postMessage({
+                  type: 'WORKER_NETWORK_CAPTURE',
+                  data: {
+                    url: url,
+                    method: 'GET',
+                    response: text,
+                    status: response.status,
+                    timestamp: Date.now()
+                  }
+                });
+                
+                return new Response(new Blob([text]), {
+                  status: response.status,
+                  statusText: response.statusText,
+                  headers: response.headers
+                });
+              } catch (error) {
+                console.error('Worker fetch error:', error);
+                throw error;
+              }
+            }
+            return originalWorkerFetch.apply(this, args);
+          };
+          
+          // Intercept IndexedDB
+          window.indexedDB.open = function(name, version) {
+            console.log('🔍 Intercepting IndexedDB open:', name);
+            const request = originalOpenDB.call(indexedDB, name, version);
+            
+            request.onupgradeneeded = function(event) {
+              console.log('🔄 IndexedDB upgrade needed for:', name);
+              const db = event.target.result;
+              
+              // Intercept object store creation to add our proxy
+              const originalCreateObjectStore = db.createObjectStore;
+              db.createObjectStore = function(name, options) {
+                console.log('📦 Creating object store:', name);
+                const store = originalCreateObjectStore.call(db, name, options);
+                
+                // Intercept get method
+                const originalGet = store.get;
+                store.get = function(key) {
+                  console.log('🔑 Intercepting get for store:', name, 'key:', key);
+                  const request = originalGet.call(store, key);
+                  
+                  request.onsuccess = function(event) {
+                    console.log('📥 Got data from store:', name, 'key:', key);
+                    if (event.target.result) {
+                      self.postMessage({
+                        type: 'INDEXEDDB_GET_ITEM',
+                        data: {
+                          store: name,
+                          key: key,
+                          value: event.target.result,
+                          timestamp: Date.now()
+                        }
+                      });
+                    }
+                  };
+                  
+                  return request;
+                };
+                
+                return store;
+              };
+            };
+            
+            return request;
+          };
+        })();
+        
+        // Original worker code will be executed after this
+        importScripts('${scriptURL}');
+      `], { type: 'application/javascript' });
+      
+      const workerBlobUrl = URL.createObjectURL(workerBlob);
+      const worker = new originalWorker(workerBlobUrl, options);
+      
+      // Listen for messages from the worker
+      const originalPostMessage = worker.postMessage;
+      worker.postMessage = function(...args) {
+        return originalPostMessage.apply(this, args);
+      };
+      
+      // Add our own message listener
+      const originalOnerror = worker.onerror;
+      worker.onerror = function(event) {
+        console.error('Worker error:', event);
+        if (originalOnerror) {
+          return originalOnerror.call(worker, event);
+        }
+      };
+      
+      return worker;
+    };
+  }
+  
+  // Intercept worker creation
+  interceptWorkerCommunication();
+  
   // Track all requests from the very beginning
   window.earlyRequests = [];
   
@@ -20,7 +145,7 @@
     xhr.open = function(method, url, ...args) {
       console.log('🌐 EARLY XHR:', method, url);
       
-      if (url.includes('service.svc') || url.includes('FindConversation')) {
+      if (url.includes('service.svc') || url.includes('FindConversation') || (url.includes('service.svc?action=GetItem'))) {
         console.log('🎯 EARLY CAPTURE:', url);
         window.earlyRequests.push({
           type: 'xhr',
@@ -42,7 +167,7 @@
       const method = this._interceptMethod || 'unknown';
       
       this.addEventListener('readystatechange', function() {
-        if (this.readyState === 4 && (url.includes('service.svc') || url.includes('FindConversation'))) {
+        if (this.readyState === 4 && (url.includes('service.svc') || url.includes('FindConversation') || url.includes('service.svc?action=GetItem'))) {
           console.log('🎯 EARLY XHR RESPONSE:', url, this.status);
           console.log('Response preview:', this.responseText.substring(0, 300));
           
@@ -88,7 +213,7 @@
     try {
       const response = await originalFetch.apply(this, args);
       
-      if (url && (url.includes('service.svc') || url.includes('FindConversation'))) {
+      if (url && (url.includes('service.svc') || url.includes('FindConversation') || url.includes('service.svc?action=GetItem'))) {
         console.log('🎯 EARLY FETCH RESPONSE:', url, response.status);
         
         // Clone response to avoid consuming it
